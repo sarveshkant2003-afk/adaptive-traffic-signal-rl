@@ -1,0 +1,207 @@
+<!-- Replay component for the Streamlit demo.
+     streamlit_app.py loads this file and replaces __TRACES__ with a JSON array of
+     1 or 2 traces (each: {controller, frames:[{t, phase, queues, vehicles:[[id,x,y,angle,halted],...]}]}).
+     Pure canvas + requestAnimationFrame; no external libraries. -->
+<div id="replay-root" style="font-family: -apple-system, 'Segoe UI', sans-serif; color: #e8e8e8;">
+  <div id="controls" style="display:flex; align-items:center; gap:14px; margin-bottom:10px; flex-wrap:wrap;">
+    <button id="playpause" style="background:#ff4b4b; color:white; border:none; border-radius:6px;
+            padding:6px 18px; font-size:15px; cursor:pointer; min-width:90px;">&#10074;&#10074; Pause</button>
+    <label style="font-size:13px;">Speed
+      <select id="speed" style="background:#262730; color:#e8e8e8; border:1px solid #555;
+              border-radius:4px; padding:3px 6px; margin-left:4px;">
+        <option value="1">1&times;</option>
+        <option value="2" selected>2&times;</option>
+        <option value="4">4&times;</option>
+        <option value="8">8&times;</option>
+      </select>
+    </label>
+    <span id="clock" style="font-size:13px; font-variant-numeric:tabular-nums;">t = 0s</span>
+    <input id="scrub" type="range" min="0" max="599" value="0" style="flex:1; min-width:120px; accent-color:#ff4b4b;">
+  </div>
+  <div id="panels" style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;"></div>
+</div>
+
+<script>
+const TRACES = __TRACES__;
+
+const SIZE = 380;              // canvas px
+const WORLD = 190;             // show +/- this many metres around the centre
+const SCALE = SIZE / (2 * WORLD);
+const ROAD_W = 20;             // road half... full width in px of one direction's carriageway
+const CAR_L = 5 * SCALE * 2.6, CAR_W = 2.2 * SCALE * 2.6;  // exaggerated so cars are visible
+const LATERAL = 4.5;           // exaggerate the ~1.6m lane offset so the two directions read clearly
+
+const panels = document.getElementById("panels");
+const states = [];             // per-trace runtime state
+
+function fmtTime(s) { const m = Math.floor(s/60); return `${m}:${String(Math.floor(s%60)).padStart(2,"0")}`; }
+
+TRACES.forEach((trace, i) => {
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "text-align:center;";
+  wrap.innerHTML = `
+    <div style="font-size:14px; font-weight:600; margin-bottom:6px;">${trace.controller}</div>
+    <canvas width="${SIZE}" height="${SIZE}" style="border-radius:10px; max-width:100%;"></canvas>
+    <div style="display:flex; justify-content:space-between; font-size:12px; margin-top:6px; padding:0 4px;">
+      <span>Queued now: <b class="qnow" style="font-variant-numeric:tabular-nums;">0</b></span>
+      <span>Total queue-time: <b class="qtotal" style="font-variant-numeric:tabular-nums;">0</b> veh&middot;s</span>
+    </div>`;
+  panels.appendChild(wrap);
+  // cumulative halted vehicle-seconds up to each frame, so scrubbing stays consistent
+  let acc = 0;
+  const cumQueue = trace.frames.map(f => (acc += f.queues.reduce((a,b)=>a+b,0)));
+  states.push({
+    trace,
+    canvas: wrap.querySelector("canvas"),
+    ctx: wrap.querySelector("canvas").getContext("2d"),
+    qnow: wrap.querySelector(".qnow"),
+    qtotal: wrap.querySelector(".qtotal"),
+    cumQueue,
+  });
+});
+
+const N_FRAMES = Math.min(...states.map(s => s.trace.frames.length));
+document.getElementById("scrub").max = N_FRAMES - 1;
+
+function toCanvas(x, y) { return [SIZE/2 + x*SCALE, SIZE/2 - y*SCALE]; }
+
+function drawStatic(ctx) {
+  // grass
+  ctx.fillStyle = "#1d2b1f";
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  // roads
+  ctx.fillStyle = "#3a3f44";
+  ctx.fillRect(SIZE/2 - ROAD_W, 0, ROAD_W*2, SIZE);          // N-S road
+  ctx.fillRect(0, SIZE/2 - ROAD_W, SIZE, ROAD_W*2);          // E-W road
+  // centre line dashes
+  ctx.strokeStyle = "#666";
+  ctx.setLineDash([6, 8]);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(SIZE/2, 0); ctx.lineTo(SIZE/2, SIZE/2 - ROAD_W);
+  ctx.moveTo(SIZE/2, SIZE/2 + ROAD_W); ctx.lineTo(SIZE/2, SIZE);
+  ctx.moveTo(0, SIZE/2); ctx.lineTo(SIZE/2 - ROAD_W, SIZE/2);
+  ctx.moveTo(SIZE/2 + ROAD_W, SIZE/2); ctx.lineTo(SIZE, SIZE/2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // junction box
+  ctx.fillStyle = "#43484d";
+  ctx.fillRect(SIZE/2 - ROAD_W, SIZE/2 - ROAD_W, ROAD_W*2, ROAD_W*2);
+  // compass labels
+  ctx.fillStyle = "#9aa0a6";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("N", SIZE/2 + ROAD_W + 14, 14);
+  ctx.fillText("S", SIZE/2 - ROAD_W - 14, SIZE - 8);
+  ctx.fillText("E", SIZE - 10, SIZE/2 - ROAD_W - 8);
+  ctx.fillText("W", 10, SIZE/2 + ROAD_W + 14);
+}
+
+// phase: 0 = N/S green, 1 = N/S yellow, 2 = E/W green, 3 = E/W yellow
+function lightColors(phase) {
+  const G = "#2ecc71", Y = "#f1c40f", R = "#e74c3c";
+  if (phase === 0) return { ns: G, ew: R };
+  if (phase === 1) return { ns: Y, ew: R };
+  if (phase === 2) return { ns: R, ew: G };
+  return { ns: R, ew: Y };
+}
+
+function drawLights(ctx, phase) {
+  const c = lightColors(phase);
+  const off = ROAD_W + 6;
+  const dots = [
+    // [x, y, colour] : one signal head per approach, at its stop line, on the
+    // right-hand side of that approach's incoming lane (right-hand traffic)
+    [SIZE/2 - ROAD_W/2, SIZE/2 - off, c.ns],   // from N, heading S (west side of road)
+    [SIZE/2 + ROAD_W/2, SIZE/2 + off, c.ns],   // from S, heading N (east side)
+    [SIZE/2 + off, SIZE/2 - ROAD_W/2, c.ew],   // from E, heading W (north side)
+    [SIZE/2 - off, SIZE/2 + ROAD_W/2, c.ew],   // from W, heading E (south side)
+  ];
+  for (const [x, y, col] of dots) {
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5, 0, Math.PI*2);
+    ctx.fillStyle = col;
+    ctx.fill();
+    ctx.strokeStyle = "#111";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function drawVehicles(ctx, fA, fB, alpha) {
+  // interpolate positions for vehicles present in both frames; draw B-only vehicles as-is
+  const inA = new Map(fA.vehicles.map(v => [v[0], v]));
+  for (const v of fB.vehicles) {
+    const prev = inA.get(v[0]);
+    let x = v[1], y = v[2], ang = v[3];
+    if (prev) {
+      x = prev[1] + (v[1] - prev[1]) * alpha;
+      y = prev[2] + (v[2] - prev[2]) * alpha;
+      let d = v[3] - prev[3];
+      if (d > 180) d -= 360; if (d < -180) d += 360;
+      ang = prev[3] + d * alpha;
+    }
+    // through-traffic only: heading ~N/S means the car's x is its (small) lane offset; ~E/W means y is
+    const heading = ((ang % 360) + 360) % 360;
+    const northSouth = (heading < 45 || heading > 315 || (heading > 135 && heading < 225));
+    if (northSouth) x *= LATERAL; else y *= LATERAL;
+    const [cx, cy] = toCanvas(x, y);
+    if (cx < -10 || cx > SIZE+10 || cy < -10 || cy > SIZE+10) continue;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(ang * Math.PI / 180);         // SUMO angle: 0 = north, clockwise; canvas y already flipped by translate use
+    ctx.fillStyle = v[4] ? "#e74c3c" : "#4da3ff";
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(-CAR_W/2, -CAR_L/2, CAR_W, CAR_L, 2);
+    else ctx.rect(-CAR_W/2, -CAR_L/2, CAR_W, CAR_L);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function render(t) {  // t = fractional frame index
+  const i = Math.min(Math.floor(t), N_FRAMES - 1);
+  const j = Math.min(i + 1, N_FRAMES - 1);
+  const alpha = t - i;
+  for (const s of states) {
+    const fA = s.trace.frames[i], fB = s.trace.frames[j];
+    drawStatic(s.ctx);
+    drawVehicles(s.ctx, fA, fB, alpha);
+    drawLights(s.ctx, fA.phase);
+    s.qnow.textContent = fA.queues.reduce((a,b)=>a+b,0);
+    s.qtotal.textContent = s.cumQueue[i].toLocaleString();
+  }
+  document.getElementById("clock").textContent = "t = " + fmtTime(states[0].trace.frames[i].t) + " / " + fmtTime(N_FRAMES - 1);
+  document.getElementById("scrub").value = i;
+}
+
+let playing = true;
+let clock = 0;                 // fractional frame position
+let lastTs = null;
+
+const btn = document.getElementById("playpause");
+btn.onclick = () => {
+  playing = !playing;
+  btn.innerHTML = playing ? "&#10074;&#10074; Pause" : "&#9654; Play";
+  lastTs = null;
+};
+document.getElementById("scrub").oninput = (e) => {
+  clock = Number(e.target.value);
+  render(clock);
+};
+
+function tick(ts) {
+  if (playing) {
+    if (lastTs !== null) {
+      const speed = Number(document.getElementById("speed").value);
+      clock += (ts - lastTs) / 1000 * speed;   // 1 frame = 1 simulated second
+      if (clock >= N_FRAMES - 1) clock = 0;    // loop
+    }
+    lastTs = ts;
+    render(clock);
+  }
+  requestAnimationFrame(tick);
+}
+render(0);
+requestAnimationFrame(tick);
+</script>

@@ -1,0 +1,8 @@
+# Dependencies for the Streamlit demo app only (deployed on Streamlit Community Cloud).
+# The app replays precomputed simulation traces, so SUMO is NOT needed here.
+# To retrain / regenerate traces locally you additionally need: eclipse-sumo, traci, sumolib,
+# matplotlib, jupyter (see "Run it yourself" in the README).
+streamlit>=1.37
+numpy
+pandas
+plotly
