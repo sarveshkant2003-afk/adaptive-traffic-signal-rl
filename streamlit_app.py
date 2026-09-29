@@ -19,7 +19,6 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 st.set_page_config(
     page_title="Adaptive Traffic Signal RL",
-    page_icon="🚦",
     layout="wide",
 )
 
@@ -81,7 +80,7 @@ def discretize(n):  # must mirror the notebooks
 BUCKET_LABELS = {0: "empty (0)", 1: "light (1–2)", 2: "medium (3–5)", 3: "heavy (6+)"}
 
 
-st.title("🚦 Adaptive Traffic Signal Control with Q-Learning")
+st.title("Adaptive Traffic Signal Control with Q-Learning")
 st.markdown(
     "A reinforcement-learning agent that controls a traffic light in the [SUMO](https://eclipse.dev/sumo/) "
     "traffic simulator — deciding every 5 seconds whether to **hold** or **switch** the green phase based on "
@@ -90,7 +89,7 @@ st.markdown(
 )
 
 tab_demo, tab_results, tab_policy, tab_how = st.tabs(
-    ["🚦 Live demo", "📊 Results", "🧠 Policy explorer", "📖 How it works"])
+    ["Live demo", "Results", "Policy explorer", "How it works"])
 
 
 # ---------------------------------------------------------------- Live demo
@@ -193,10 +192,10 @@ with tab_policy:
     left, right = st.columns([1, 1.2])
 
     with left:
-        qn = st.slider("🚗 North approach — queued vehicles", 0, 10, 4)
-        qs = st.slider("🚗 South approach — queued vehicles", 0, 10, 4)
-        qe = st.slider("🚗 East approach — queued vehicles", 0, 10, 0)
-        qw = st.slider("🚗 West approach — queued vehicles", 0, 10, 0)
+        qn = st.slider("North approach: queued vehicles", 0, 10, 4)
+        qs = st.slider("South approach: queued vehicles", 0, 10, 4)
+        qe = st.slider("East approach: queued vehicles", 0, 10, 0)
+        qw = st.slider("West approach: queued vehicles", 0, 10, 0)
         green = st.radio("Currently green:", ["North–South", "East–West"], index=1, horizontal=True)
 
     green_idx = 0 if green == "North–South" else 1
