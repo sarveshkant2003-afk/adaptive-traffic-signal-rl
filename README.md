@@ -12,9 +12,9 @@ with identical vehicle throughput — evaluated on 10 held-out random seeds.
 ![Streamlit](https://img.shields.io/badge/Streamlit-demo-FF4B4B?logo=streamlit&logoColor=white)
 ![RL](https://img.shields.io/badge/RL-tabular%20Q--learning-orange)
 
-## Demo
+## Live demo
 
-Run it locally with `streamlit run streamlit_app.py` (no SUMO needed); a hosted link is coming.
+**[adaptive-traffic-signal-rl.streamlit.app](https://adaptive-traffic-signal-rl.streamlit.app/)** (no install needed; if it has been idle, it takes about 30 seconds to wake up)
 
 The same simulated traffic, two controllers. Red cars are stopped; watch the *total queue-time*
 counters diverge:
